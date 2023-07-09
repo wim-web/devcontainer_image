@@ -1,0 +1,66 @@
+name: Create and publish a Docker image
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  get-target:
+    runs-on: ubuntu-latest
+    outputs:
+      target: ${{ steps.target.outputs.t }}
+    steps:
+      - uses: actions/checkout@v3.5.3
+      - uses: technote-space/get-diff-action@v6
+        with:
+          PATTERNS: |
+            images/**
+      - id: target
+        run: |
+          j=$(echo "${{ env.GIT_DIFF_FILTERED }}" \
+          | tr ' ' '\n' \
+          | sed 's/images\/\([^/]*\)\/.*/\1/' \
+          | sort -u \
+          | jq -cnR '[inputs]')
+          echo "t=$j" >> $GITHUB_OUTPUT
+  build-and-push-image:
+    if: needs.get-target.outputs.target != '[]' && needs.get-target.outputs.target != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    needs: ['get-target']
+    strategy:
+      matrix:
+        target: ${{ fromJson(needs.get-target.outputs.target) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3.5.3
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v2.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v4.6.0
+        with:
+          images: ghcr.io/${{ github.repository }}-${{ matrix.target }}
+          tags: |
+            type=sha
+            
+      - uses: docker/setup-qemu-action@v2.2.0
+      - uses: docker/setup-buildx-action@v2.9.0
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v4.1.1
+        with:
+          context: images/${{ matrix.target }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
